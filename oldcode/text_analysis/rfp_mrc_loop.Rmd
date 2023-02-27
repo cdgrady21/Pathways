@@ -1,0 +1,113 @@
+---
+title: "machineRead_rfp"
+output: html_document
+date: '2022-12-28'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+library(tidyverse)
+library(pdftools)
+library(tesseract)
+library(stringr)
+
+# might be needed for some tasks
+#library(readtext)
+#library(quanteda)
+#library(stringi)
+
+eng <- tesseract("eng")
+```
+
+*Overall end goal*: Want to produce a dataset/spreadsheet for each RFP. Rows as paragraphs that include PEA language, column 1 has the paragraph & column 2 has the thing that is PEA language
+
+## The function
+
+Make dataframe where para is row and cols for page number and paragraph number. Then a col for "PEA citation".
+
+```{r}
+## chris: note: should have made a few functions and has this bigger function use those, but was lazy.
+
+# one big function that does everything
+rfa.fun <- function(n=5)
+{
+  # scan in pdf
+  text <- pdf_text(paste0(getwd(),"/RFPs_2022-12-28/",files[n]))
+  
+  #make df of rows as paragraphs, cols for text, page num, etc
+  test <- as.data.frame(text, col.names="text")
+  test$page <- row.names(test)
+  fill_df <- test %>% separate_rows(text, sep="\n\n")
+  fill_df <- fill_df %>% group_by(page) %>%
+    mutate(para_of_page = row_number())
+  fill_df$paragraph_num <- row.names(fill_df)
+  rm(test); rm(text)
+  
+  #clean
+  fill_df$text <- str_squish(fill_df$text)
+  df <- fill_df
+  
+  # look for keywords
+  keyWords1 <- c("Political economy analysis", "Political economy", 
+              "Thinking and working politically")
+  keyWords2 <- c("PEA","TWP")
+  keyWords <- c(keyWords1, keyWords2)
+  
+  df$pea_01 <- ifelse(grepl(paste(keyWords1, collapse="|"),
+                                 df$text,ignore.case=T), 1, 0)
+  df$pea_01 <- ifelse(grepl(paste(keyWords2, collapse="|"),
+                                 df$text), 1, df$pea_01)
+  
+  #stop if no keywords
+  if(sum(df$pea_01)>0)
+  {
+    # Dump pages with no keywords
+  pages <- unique(df$page[df$pea_01 %in% 1])
+  df <- df[df$page %in% pages,]
+  
+  # next, which words are used?
+  df[,keyWords] <- NA
+  for(i in 1:length(keyWords))
+  {
+    df[,keyWords[i]] <- ifelse(grepl(keyWords[i], df$text, ignore.case=T), 1, 0)
+  }
+  
+  # make a single column showing all the words used
+  ## here, col 6 starts the pea words
+  df$all_pea_words <- apply(df[,6:ncol(df)], 1, function(x) paste(colnames(df[,6:ncol(df)])[which(x == 1)], collapse = ", "))
+  
+  # remove cols for individual words
+  df <- df[,c(1:5,ncol(df))]
+  
+  # save csv
+  write.csv(df, file=paste0("rfp_2022_sheets/",gsub(".pdf", "", files[n]), "_sheet.csv"), row.names = FALSE)
+  }
+  
+}
+#test <- rfa.fun(n=145)
+```
+
+
+## scan in docs & loop function over each of them
+
+```{r}
+files <- list.files(path=paste0(getwd(),"/RFPs_2022-12-28"),
+                    pattern=".pdf", 
+                    all.files=FALSE, full.names=FALSE)
+stopifnot(length(files)==380)
+
+system.time(for(i in 1:length(files))
+{
+  rfa.fun(i)
+})
+
+#how many sheets?
+end <- list.files(path=paste0(getwd(),"/rfp_2022_sheets"),
+                   pattern=".csv")
+length(end)
+```
+
+# upload to googledrive
+
+Cannot link gmail account to usaid googledrive.  Must manually upload.
