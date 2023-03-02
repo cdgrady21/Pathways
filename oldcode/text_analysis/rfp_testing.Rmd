@@ -1,0 +1,141 @@
+---
+title: "machineRead_rfa"
+output: html_document
+date: '2022-08-22'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+library(tidyverse)
+library(pdftools)
+library(tesseract)
+library(stringr)
+
+# might be needed
+#library(readtext)
+#library(quanteda)
+#library(stringi)
+
+
+eng <- tesseract("eng")
+```
+
+*Overall end goal*: Want to produce a dataset/spreadsheet for each RFP. Rows as paragraphs that include evidence, column 1 has the paragraph & column 2 has the thing that is evidence.
+
+
+## scan in a doc
+
+https://cran.r-project.org/web/packages/tesseract/vignettes/intro.html
+https://alexluscombe.ca/blog/getting-your-.pdfs-into-r/
+https://medium.com/swlh/the-adventure-of-pdf-to-data-frame-in-r-f90609035600
+
+```{r}
+files <- list.files(path=paste0(getwd(),"/RFPs_2022-12-28"),
+                    pattern=".pdf", 
+                    all.files=FALSE, full.names=FALSE)
+stopifnot(length(files)==380)
+n=5
+text <- pdf_text(paste0(getwd(),"/RFPs_2022-12-28/",files[n]))
+
+# n=8 means this read in the 8th file.
+```
+
+## Take a gander
+
+Notes here: 
+
+```{r}
+str(text)
+sum(nchar(text))
+text[50]
+
+# "\n\n" is how this makes a new paragraph. \n is a new line (can happen midsentence).  pdf scans in by page; unlist mashes the pages together.
+```
+
+Make dataframe where para is row and cols for page number and paragraph number. Then a col for "evidence citation".
+
+```{r}
+## str_squish does cleaning, like removing other "\n" that separate lines, trimws, etc.
+#df1 <- unlist(strsplit(text, "\n\n", perl=T))
+#df1 <- str_squish(df)
+
+##############
+# Chris: want to know page numbers
+# i have text, 56 chr elements where each element is all text on a page.
+# need to make each page a df
+# each row of df should be a paragraph
+# cols should specify paragraph text and page number
+# then need to cbind all those dfs
+
+test <- as.data.frame(text, col.names="text")
+test$page <- row.names(test)
+fill_df <- test %>% separate_rows(text, sep="\n\n")
+
+# make rownames col
+fill_df$paragraph_num <- row.names(fill_df)
+
+# clean text
+fill_df$text <- str_squish(fill_df$text)
+
+# rename
+df <- fill_df
+```
+
+
+
+## Look for the keywords in each paragraph
+
+```{r}
+keyWords1 <- c("Political economy analysis", "Political economy", 
+              "Thinking and working politically")
+keyWords2 <- c("PEA","TWP")
+keyWords <- c(keyWords1, keyWords2)
+
+# first, are any of these words used?
+df$evidence_01 <- ifelse(grepl(paste(keyWords1, collapse="|"), 
+                               df$text,  ignore.case=T), 
+                         1, 0)
+df$evidence_01 <- ifelse(grepl(paste(keyWords2, collapse="|"), 
+                               df$text), 
+                         1, df$evidence_01)
+#View(df[df$evidence_01 %in% 1,])
+
+#chris: here stop if nrow(df)<1
+
+# Dump pages where no evidence cited
+pages <- unique(df$page[df$evidence_01 %in% 1])
+df <- df[df$page %in% pages,]
+
+# next, which words are used?
+## make column for each word; loop search over each element of keyWords
+df[,keyWords] <- NA
+for(i in 1:length(keyWords))
+{
+  df[,keyWords[i]] <- ifelse(grepl(keyWords[i], df$text, ignore.case=T), 1, 0)
+}
+
+
+# make a single column showing all the words used
+## based off of: https://stackoverflow.com/questions/51021156/find-column-index-where-row-value-is-greater-than-zero-in-r
+## for each row in df, extract the names of each column that is equal to 1, then collapse into one vector and separate with commas.
+###which(df[1,]>0) # had to switch to == 1 because other cols >0
+df$all_evidence_words <- apply(df[,5:ncol(df)], 1, function(x) paste(colnames(df[,5:ncol(df)])[which(x == 1)], collapse = ", "))
+
+# count the number of keywords used
+#df$num_words <- rowSums(df[,3:56], na.rm=T)
+
+# remove cols for individual words
+df <- df[,c(1:4,ncol(df))]
+```
+
+
+# Save
+
+Actually, only want to write the csv if at least 1 row
+
+```{r}
+if(nrow(df)>0)
+  write.csv(df, file=paste0("sheets/",gsub(".pdf", "", files[n]), "_sheet.csv"), row.names = FALSE)
+```
+
